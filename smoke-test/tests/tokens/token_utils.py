@@ -1,6 +1,81 @@
 import time
+from typing import Any, Dict, List
 
-from tests.utils import get_frontend_url
+from tests.utils import get_frontend_url, wait_for_writes_to_sync
+
+
+def token_name_filter(name: str) -> Dict[str, Any]:
+    return {
+        "field": "name",
+        "condition": "EQUAL",
+        "values": [name],
+    }
+
+
+def list_access_tokens(session, filters: List[Dict[str, Any]]) -> Dict[str, Any]:
+    token_input: Dict[str, Any] = {"start": 0, "count": 20}
+    if filters:
+        token_input["filters"] = filters
+
+    json_payload = {
+        "query": """query listAccessTokens($input: ListAccessTokenInput!) {
+            listAccessTokens(input: $input) {
+              start
+              count
+              total
+              tokens {
+                urn
+                id
+                actorUrn
+                ownerUrn
+              }
+            }
+        }""",
+        "variables": {"input": token_input},
+    }
+
+    response = session.post(f"{get_frontend_url()}/api/v2/graphql", json=json_payload)
+    response.raise_for_status()
+    return response.json()
+
+
+def revoke_access_token(session, token_id: str) -> Dict[str, Any]:
+    json_payload = {
+        "query": """mutation revokeAccessToken($tokenId: String!) {
+            revokeAccessToken(tokenId: $tokenId)
+        }""",
+        "variables": {"tokenId": token_id},
+    }
+
+    response = session.post(f"{get_frontend_url()}/api/v2/graphql", json=json_payload)
+    response.raise_for_status()
+    return response.json()
+
+
+def revoke_tokens_matching(session, filters: List[Dict[str, Any]]) -> None:
+    res_data = list_access_tokens(session, filters)
+    assert res_data
+    assert res_data["data"]
+
+    tokens = res_data["data"]["listAccessTokens"]["tokens"]
+    if tokens:
+        for metadata in tokens:
+            revoke_access_token(session, metadata["id"])
+        wait_for_writes_to_sync()
+
+
+def assert_no_tokens_matching(session, filters: List[Dict[str, Any]]) -> None:
+    res_data = list_access_tokens(session, filters)
+    assert res_data
+    assert res_data["data"]
+    assert res_data["data"]["listAccessTokens"]["total"] == 0
+    assert not res_data["data"]["listAccessTokens"]["tokens"]
+
+
+def assert_graphql_mutation_succeeded(res_data: Dict[str, Any]) -> None:
+    errors = res_data.get("errors")
+    assert not errors, errors
+    assert res_data.get("data")
 
 
 def getUserId(session):

@@ -5,7 +5,14 @@ from typing import Dict, List, Set
 
 import pytest
 
-from tests.tokens.token_utils import removeUser, wait_for_user_in_list
+from tests.tokens.token_utils import (
+    assert_graphql_mutation_succeeded,
+    assert_no_tokens_matching,
+    removeUser,
+    revoke_tokens_matching,
+    token_name_filter,
+    wait_for_user_in_list,
+)
 from tests.utils import (
     get_admin_credentials,
     get_frontend_url,
@@ -24,16 +31,12 @@ os.environ["DATAHUB_TELEMETRY_ENABLED"] = "false"
 # Valid email for auth.native.signUp.enforceValidEmail (Play EmailValidator).
 AUDIT_SUITE_USER_EMAIL = "audit.events.user@smoke.datahub.test"
 AUDIT_SUITE_USER_URN = f"urn:li:corpuser:{AUDIT_SUITE_USER_EMAIL}"
+AUDIT_SUITE_TOKEN_NAME = "audit-suite-token"
 
 
 @pytest.fixture()
-def auth_exclude_filter():
-    return {
-        "field": "name",
-        "condition": "EQUAL",
-        "negated": True,
-        "values": ["Test Session Token"],
-    }
+def suite_token_filter():
+    return [token_name_filter(AUDIT_SUITE_TOKEN_NAME)]
 
 
 @pytest.fixture(scope="class", autouse=True)
@@ -105,40 +108,24 @@ def custom_user_setup():
 
 
 @pytest.fixture(autouse=True)
-def access_token_setup(auth_session, auth_exclude_filter):
-    """Fixture to execute asserts before and after a test is run"""
+def access_token_setup(auth_session, suite_token_filter):
+    """Revoke only this suite's tokens so parallel workers do not interfere."""
     admin_session = login_as(admin_user, admin_pass)
 
-    res_data = listAccessTokens(admin_session, filters=[auth_exclude_filter])
-    assert res_data
-    assert res_data["data"]
-
-    if res_data["data"]["listAccessTokens"]["tokens"]:
-        for metadata in res_data["data"]["listAccessTokens"]["tokens"]:
-            revokeAccessToken(admin_session, metadata["id"])
-        wait_for_writes_to_sync()
-
-    # Verify clean state after cleanup
-    res_data = listAccessTokens(admin_session, filters=[auth_exclude_filter])
-    assert res_data["data"]["listAccessTokens"]["total"] == 0
-    assert not res_data["data"]["listAccessTokens"]["tokens"]
+    revoke_tokens_matching(admin_session, suite_token_filter)
+    assert_no_tokens_matching(admin_session, suite_token_filter)
 
     yield
 
-    # Clean up after the test
-    res_data = listAccessTokens(admin_session, filters=[auth_exclude_filter])
-    for metadata in res_data["data"]["listAccessTokens"]["tokens"]:
-        revokeAccessToken(admin_session, metadata["id"])
-    wait_for_writes_to_sync()
+    revoke_tokens_matching(admin_session, suite_token_filter)
 
 
-def test_audit_token_events(auth_exclude_filter):
+def test_audit_token_events():
     user_session = login_as(AUDIT_SUITE_USER_EMAIL, "user")
 
     # Normal user should be able to generate token for himself.
     res_data = generateAccessToken_v2(user_session, AUDIT_SUITE_USER_URN)
-    assert res_data
-    assert res_data["data"]
+    assert_graphql_mutation_succeeded(res_data)
     assert res_data["data"]["createAccessToken"]
     assert res_data["data"]["createAccessToken"]["accessToken"]
     assert (
@@ -184,7 +171,7 @@ def test_audit_token_events(auth_exclude_filter):
     )
 
 
-def test_login_events(auth_exclude_filter):
+def test_login_events():
     user_session = login_as(AUDIT_SUITE_USER_EMAIL, "user")
     time.sleep(10)
 
@@ -207,7 +194,7 @@ def test_login_events(auth_exclude_filter):
     user_session.cookies.clear()
 
 
-def test_failed_login_events(auth_exclude_filter):
+def test_failed_login_events():
     try:
         user_session = login_as(AUDIT_SUITE_USER_EMAIL, "NOTMYPASSWORD")
     except Exception:
@@ -234,7 +221,7 @@ def test_failed_login_events(auth_exclude_filter):
     user_session.cookies.clear()
 
 
-def test_policy_events(auth_exclude_filter):
+def test_policy_events():
     user_session = login_as(admin_user, admin_pass)
     json = {
         "query": """mutation createPolicy($input: PolicyUpdateInput!) {\n
@@ -312,7 +299,7 @@ def test_policy_events(auth_exclude_filter):
     user_session.cookies.clear()
 
 
-def test_ingestion_source_events(auth_exclude_filter):
+def test_ingestion_source_events():
     user_session = login_as(admin_user, admin_pass)
     json = {
         "query": """mutation createIngestionSource($input: UpdateIngestionSourceInput!) {\n
@@ -383,7 +370,7 @@ def test_ingestion_source_events(auth_exclude_filter):
     user_session.cookies.clear()
 
 
-def test_user_events(auth_exclude_filter):
+def test_user_events():
     user_session = login_as(admin_user, admin_pass)
     wait_for_writes_to_sync(consumer_group="datahub-usage-event-consumer-job-client")
 
@@ -430,7 +417,7 @@ def test_user_events(auth_exclude_filter):
     user_session.cookies.clear()
 
 
-def test_policy_create_delete(auth_exclude_filter):
+def test_policy_create_delete():
     user_session = login_as(admin_user, admin_pass)
     json = {
         "query": """mutation createPolicy($input: PolicyUpdateInput!) {\n
@@ -516,7 +503,7 @@ def generateAccessToken_v2(session, actorUrn):
                 "type": "PERSONAL",
                 "actorUrn": actorUrn,
                 "duration": "ONE_HOUR",
-                "name": "my token",
+                "name": AUDIT_SUITE_TOKEN_NAME,
             }
         },
     }
