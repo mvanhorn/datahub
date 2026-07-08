@@ -2,6 +2,7 @@ import logging
 
 import pytest
 
+from tests.privileges.global_policy_lock import global_policy_state_lock
 from tests.privileges.utils import (
     assign_role,
     assign_user_to_group,
@@ -46,62 +47,63 @@ def admin_session(auth_session):
 @pytest.fixture(scope="module", autouse=True)
 def privileges_and_test_user_setup(admin_session):
     """Fixture to execute setup before and tear down after all tests are run"""
-    # Clean up any leftover test policies from previous failed runs
-    clear_polices(admin_session)
+    with global_policy_state_lock():
+        # Clean up any leftover test policies from previous failed runs
+        clear_polices(admin_session, name_prefix="Test Policy")
 
-    # Disable 'All users' privileges
-    set_base_platform_privileges_policy_status("INACTIVE", admin_session)
-    set_view_dataset_sensitive_info_policy_status("INACTIVE", admin_session)
-    set_view_entity_profile_privileges_policy_status("INACTIVE", admin_session)
-    # Sleep for eventual consistency
-    wait_for_writes_to_sync()
+        # Disable 'All users' privileges
+        set_base_platform_privileges_policy_status("INACTIVE", admin_session)
+        set_view_dataset_sensitive_info_policy_status("INACTIVE", admin_session)
+        set_view_entity_profile_privileges_policy_status("INACTIVE", admin_session)
+        # Sleep for eventual consistency
+        wait_for_writes_to_sync()
 
-    # Verify clean state
-    logger.info("=" * 80)
-    logger.info("Initial test setup - verifying clean state")
-    log_policies(admin_session, "(after cleanup, before test user creation)")
-    logger.info("=" * 80)
+        # Verify clean state
+        logger.info("=" * 80)
+        logger.info("Initial test setup - verifying clean state")
+        log_policies(admin_session, "(after cleanup, before test user creation)")
+        logger.info("=" * 80)
 
-    # Create a new user
-    admin_session = create_user(admin_session, TEST_PRIVILEGES_USER_EMAIL, "user")
+        # Create a new user
+        admin_session = create_user(admin_session, TEST_PRIVILEGES_USER_EMAIL, "user")
 
-    # Verify test user has no privileges initially
-    user_session = login_as(TEST_PRIVILEGES_USER_EMAIL, "user")
-    user_info = log_user_privileges(user_session, "(initial state)")
-    if user_info:
-        privileges = user_info["privileges"]
-        if any(
-            privileges.get(p)
-            for p in [
-                "managePolicies",
-                "manageSecrets",
-                "manageIngestion",
-                "generatePersonalAccessTokens",
-            ]
-        ):
-            logger.warning(
-                f"WARNING: Test user has unexpected privileges {privileges} before tests start!"
-            )
-    logger.info("=" * 80)
+        # Verify test user has no privileges initially
+        user_session = login_as(TEST_PRIVILEGES_USER_EMAIL, "user")
+        user_info = log_user_privileges(user_session, "(initial state)")
+        if user_info:
+            privileges = user_info["privileges"]
+            if any(
+                privileges.get(p)
+                for p in [
+                    "managePolicies",
+                    "manageSecrets",
+                    "manageIngestion",
+                    "generatePersonalAccessTokens",
+                ]
+            ):
+                logger.warning(
+                    f"WARNING: Test user has unexpected privileges {privileges} before tests start!"
+                )
+        logger.info("=" * 80)
 
-    yield
+        yield
 
-    # Remove test user
-    remove_user(admin_session, TEST_PRIVILEGES_USER_URN)
+        # Remove test user
+        remove_user(admin_session, TEST_PRIVILEGES_USER_URN)
 
-    # Remove secret
-    remove_secret(admin_session, "urn:li:dataHubSecret:TestSecretName")
+        # Remove secret
+        remove_secret(admin_session, "urn:li:dataHubSecret:TestSecretName")
 
-    # Remove test policies
-    clear_polices(admin_session)
+        # Remove test policies
+        clear_polices(admin_session, name_prefix="Test Policy")
 
-    # Restore All users privileges
-    set_base_platform_privileges_policy_status("ACTIVE", admin_session)
-    set_view_dataset_sensitive_info_policy_status("ACTIVE", admin_session)
-    set_view_entity_profile_privileges_policy_status("ACTIVE", admin_session)
+        # Restore All users privileges
+        set_base_platform_privileges_policy_status("ACTIVE", admin_session)
+        set_view_dataset_sensitive_info_policy_status("ACTIVE", admin_session)
+        set_view_entity_profile_privileges_policy_status("ACTIVE", admin_session)
 
-    # Sleep for eventual consistency
-    wait_for_writes_to_sync()
+        # Sleep for eventual consistency
+        wait_for_writes_to_sync()
 
 
 @with_test_retry(max_attempts=10)

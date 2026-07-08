@@ -20,6 +20,7 @@ from datahub.metadata.schema_classes import (
     DomainPropertiesClass,
 )
 from tests.consistency_utils import wait_for_writes_to_sync
+from tests.privileges.global_policy_lock import global_policy_state_lock
 from tests.privileges.utils import (
     clear_polices,
     create_user,
@@ -71,8 +72,16 @@ query getTimeline($input: GetTimelineInput!) {
 # ---------------------------------------------------------------------------
 # Module fixture: create entities, lock down policies, create restricted user
 # ---------------------------------------------------------------------------
+TIMELINE_AUTH_POLICY_PREFIX = "Timeline auth test"
+
+
 @pytest.fixture(scope="module", autouse=True)
 def auth_test_setup(graph_client, auth_session):
+    with global_policy_state_lock():
+        yield from _timeline_auth_test_setup_impl(graph_client, auth_session)
+
+
+def _timeline_auth_test_setup_impl(graph_client, auth_session):
     """
     Setup:
       1. Create test Dataset + Domain via the graph client (as admin).
@@ -109,7 +118,7 @@ def auth_test_setup(graph_client, auth_session):
     admin_session = get_frontend_session()
 
     logger.info("auth_test_setup: clearing leftover test policies")
-    clear_polices(admin_session)
+    clear_polices(admin_session, name_prefix=TIMELINE_AUTH_POLICY_PREFIX)
 
     logger.info("auth_test_setup: disabling All-Users default policies")
     set_base_platform_privileges_policy_status("INACTIVE", admin_session)
@@ -124,7 +133,7 @@ def auth_test_setup(graph_client, auth_session):
 
     logger.info("auth_test_setup: teardown — restoring policies and cleaning up")
     remove_user(admin_session, TEST_USER_URN)
-    clear_polices(admin_session)
+    clear_polices(admin_session, name_prefix=TIMELINE_AUTH_POLICY_PREFIX)
 
     set_base_platform_privileges_policy_status("ACTIVE", admin_session)
     set_view_dataset_sensitive_info_policy_status("ACTIVE", admin_session)

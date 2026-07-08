@@ -2,6 +2,7 @@ import os
 
 import pytest
 
+from tests.privileges.utils import create_user_policy, remove_policy
 from tests.utils import (
     get_admin_credentials,
     get_frontend_url,
@@ -36,10 +37,11 @@ def suite_token_filter():
     return [token_name_filter(REVOKE_SUITE_TOKEN_NAME)]
 
 
-@pytest.fixture(scope="class", autouse=True)
+@pytest.fixture(scope="module", autouse=True)
 def custom_user_setup():
     """Fixture to execute setup before and tear down after all tests are run"""
     admin_session = login_as(admin_user, admin_pass)
+    pat_policy_urn: str | None = None
 
     res_data = removeUser(admin_session, REVOKE_SUITE_USER_URN)
     assert res_data
@@ -98,7 +100,14 @@ def custom_user_setup():
         "users"
     ]
 
+    pat_policy_urn = create_user_policy(
+        REVOKE_SUITE_USER_URN, ["GENERATE_PERSONAL_ACCESS_TOKENS"], admin_session
+    )
+
     yield
+
+    if pat_policy_urn:
+        remove_policy(pat_policy_urn, admin_session)
 
     # Delete created user
     res_data = removeUser(admin_session, REVOKE_SUITE_USER_URN)

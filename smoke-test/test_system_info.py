@@ -3,7 +3,13 @@ import logging
 import pytest
 import requests
 
-from tests.privileges.utils import create_user, remove_user
+from tests.privileges.utils import (
+    create_user,
+    create_user_policy,
+    remove_policy,
+    remove_user,
+)
+from tests.tokens.token_utils import assert_graphql_mutation_succeeded
 from tests.utils import get_admin_credentials, get_frontend_url, get_gms_url, login_as
 
 logger = logging.getLogger(__name__)
@@ -260,7 +266,9 @@ def extract_api_token_from_session(session):
     response = session.post(f"{get_frontend_url()}/api/v2/graphql", json=json_payload)
     response.raise_for_status()
 
-    token_data = response.json()["data"]["createAccessToken"]
+    res_data = response.json()
+    assert_graphql_mutation_succeeded(res_data)
+    token_data = res_data["data"]["createAccessToken"]
     return token_data["accessToken"], token_data["metadata"]["id"]
 
 
@@ -278,10 +286,15 @@ def test_system_info_authenticated_non_admin_user_returns_403(auth_session):
     limited_test_email = "limited.test.user@smoke.datahub.test"
     test_user_urn = f"urn:li:corpuser:{limited_test_email}"
     token_id = None
+    pat_policy_urn = None
+    limited_user_session = None
 
     try:
         # Create a limited-privilege user (no special privileges by default)
         create_user(admin_session, limited_test_email, "testpass123")
+        pat_policy_urn = create_user_policy(
+            test_user_urn, ["GENERATE_PERSONAL_ACCESS_TOKENS"], admin_session
+        )
 
         # Login as the limited user
         limited_user_session = login_as(limited_test_email, "testpass123")
@@ -325,7 +338,7 @@ def test_system_info_authenticated_non_admin_user_returns_403(auth_session):
     finally:
         # Clean up: revoke the API token and remove the test user
         try:
-            if token_id:
+            if token_id and limited_user_session is not None:
                 # Revoke the API token
                 revoke_json = {
                     "query": """mutation revokeAccessToken($tokenId: String!) {
@@ -339,6 +352,8 @@ def test_system_info_authenticated_non_admin_user_returns_403(auth_session):
 
             # Remove the test user
             admin_cleanup_session = login_as(admin_user, admin_pass)
+            if pat_policy_urn:
+                remove_policy(pat_policy_urn, admin_cleanup_session)
             remove_user(admin_cleanup_session, test_user_urn)
             logger.info("✓ Test user and token cleaned up successfully")
         except Exception as e:

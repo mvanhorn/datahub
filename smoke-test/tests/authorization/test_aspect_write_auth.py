@@ -21,6 +21,7 @@ from datahub.metadata.schema_classes import (
     StringTypeClass,
 )
 from tests.consistency_utils import wait_for_writes_to_sync
+from tests.privileges.global_policy_lock import global_policy_state_lock
 from tests.privileges.utils import (
     clear_polices,
     create_metadata_policy,
@@ -141,8 +142,16 @@ def _schema_metadata_with_field(field_path: str = "col1") -> SchemaMetadataClass
     )
 
 
+ASPECT_WRITE_POLICY_PREFIXES = ["Test EDIT_ENTITY", "Test MANAGE_DATA_PRODUCTS"]
+
+
 @pytest.fixture(scope="module", autouse=True)
 def auth_test_setup(graph_client, auth_session):
+    with global_policy_state_lock():
+        yield from _auth_test_setup_impl(graph_client, auth_session)
+
+
+def _auth_test_setup_impl(graph_client, auth_session):
     global DATA_PRODUCT_URN
     graph_client.emit_mcp(
         MetadataChangeProposalWrapper(
@@ -260,7 +269,7 @@ def auth_test_setup(graph_client, auth_session):
     wait_for_writes_to_sync()
 
     admin_session = get_frontend_session()
-    clear_polices(admin_session)
+    clear_polices(admin_session, name_prefixes=ASPECT_WRITE_POLICY_PREFIXES)
     set_base_platform_privileges_policy_status("INACTIVE", admin_session)
     set_view_dataset_sensitive_info_policy_status("INACTIVE", admin_session)
     set_view_entity_profile_privileges_policy_status("INACTIVE", admin_session)
@@ -270,7 +279,7 @@ def auth_test_setup(graph_client, auth_session):
     yield
 
     remove_user(admin_session, TEST_USER_URN)
-    clear_polices(admin_session)
+    clear_polices(admin_session, name_prefixes=ASPECT_WRITE_POLICY_PREFIXES)
     set_base_platform_privileges_policy_status("ACTIVE", admin_session)
     set_view_dataset_sensitive_info_policy_status("ACTIVE", admin_session)
     set_view_entity_profile_privileges_policy_status("ACTIVE", admin_session)
@@ -329,7 +338,7 @@ def _wait_until_data_product_rename_denied() -> None:
 
 
 def _prepare_denied_data_product_rename_tests(admin_session) -> None:
-    clear_polices(admin_session)
+    clear_polices(admin_session, name_prefixes=ASPECT_WRITE_POLICY_PREFIXES)
     wait_for_writes_to_sync()
     _wait_until_data_product_rename_denied()
 
