@@ -43,8 +43,8 @@ echo "TEST_STRATEGY: $TEST_STRATEGY, BATCH_COUNT: $BATCH_COUNT, BATCH_NUMBER: $B
 # Heavy modules split into multiple test classes can parallelize across workers.
 xdist_args=()
 if [[ "${BATCH_COUNT:-1}" -le 1 ]]; then
-  echo "BATCH_COUNT=${BATCH_COUNT:-1}: enabling pytest-xdist -n 2 --dist=loadscope"
-  xdist_args=(-n 2 --dist=loadscope)
+  echo "BATCH_COUNT=${BATCH_COUNT:-1}: enabling pytest-xdist -n 3 --dist=loadscope"
+  xdist_args=(-n 3 --dist=loadscope)
 fi
 
 # TEST_STRATEGY:

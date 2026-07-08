@@ -414,7 +414,7 @@ jobs:
           DATAHUB_VERSION: ${{ needs.setup.outputs.tag }}
           CLEANUP_DATA: "false"
           TEST_STRATEGY: ${{ matrix.test_strategy }}
-          # BATCH_COUNT=1 skips matrix module slicing; smoke.sh uses that to enable pytest-xdist (-n 2 --dist=loadscope).
+          # BATCH_COUNT=1 skips matrix module slicing; smoke.sh uses that to enable pytest-xdist (-n 3 --dist=loadscope).
           BATCH_COUNT: "1"
           BATCH_NUMBER: "0"
           FILTERED_TESTS: ${{ steps.parse-pytest-failures.outputs.filtered_tests_file || '' }}
