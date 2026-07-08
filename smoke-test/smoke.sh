@@ -37,6 +37,15 @@ source ./set-test-env-vars.sh
 
 echo "TEST_STRATEGY: $TEST_STRATEGY, BATCH_COUNT: $BATCH_COUNT, BATCH_NUMBER: $BATCH_NUMBER"
 
+# When BATCH_COUNT > 1, conftest.py slices modules across matrix jobs (docker-unified).
+# When BATCH_COUNT <= 1 (nightly / local), that slicing is a no-op — use pytest-xdist instead.
+# --dist=loadfile keeps each test module on a single worker to reduce cross-file race risk.
+xdist_args=()
+if [[ "${BATCH_COUNT:-1}" -le 1 ]]; then
+  echo "BATCH_COUNT=${BATCH_COUNT:-1}: enabling pytest-xdist -n 2 --dist=loadfile"
+  xdist_args=(-n 2 --dist=loadfile)
+fi
+
 # TEST_STRATEGY:
 #   if set to pytests, runs all pytests, skips cypress tests(though cypress test launch is via  a pytest).
 #   if set tp cypress, runs all cypress tests
@@ -46,13 +55,18 @@ echo "TEST_STRATEGY: $TEST_STRATEGY, BATCH_COUNT: $BATCH_COUNT, BATCH_NUMBER: $B
 # increase, the batch_count config (in docker-unified.yml) may need adjustment.
 if [[ "${TEST_STRATEGY}" == "pytests" ]]; then
   #pytests only - github test matrix runs pytests in one of the runners when applicable.
-  pytest -rP --durations=20 -vv --continue-on-collection-errors --reruns 1 --reruns-delay 1 --junit-xml=junit.smoke-pytests.xml -k 'not test_run_cypress'
+  pytest -rP --durations=20 -vv --continue-on-collection-errors --reruns 1 --reruns-delay 1 \
+    ${xdist_args[@]+"${xdist_args[@]}"} \
+    --junit-xml=junit.smoke-pytests.xml -k 'not test_run_cypress'
 elif [[ "${TEST_STRATEGY}" == "cypress" ]]; then
   # run only cypress tests. The test inspects BATCH_COUNT and BATCH_NUMBER and runs only a subset of tests in that batch.
   # github workflow test matrix will invoke this in multiple runners for each batch.
   # Skipping the junit at the pytest level since cypress itself generates junits on a per-test basis. The pytest is a single test for all cypress
   # tests and isnt very helpful.
+  # Cypress is launched from a single pytest module; xdist is not useful here.
   pytest -rP --durations=20 -vvs --continue-on-collection-errors tests/cypress/integration_test.py
 else
-  pytest -rP --durations=20 -vvs --continue-on-collection-errors --junit-xml=junit.smoke-all.xml
+  pytest -rP --durations=20 -vvs --continue-on-collection-errors \
+    ${xdist_args[@]+"${xdist_args[@]}"} \
+    --junit-xml=junit.smoke-all.xml
 fi
