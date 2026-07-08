@@ -172,6 +172,9 @@ def _graphql_as_user(email: str, password: str, urn: str) -> dict:
         (TEST_DATASET_URN, "Dataset"),
         (TEST_DOMAIN_URN, "Domain"),
     ],
+    # Stable ids required for pytest-xdist: module-level uuid makes URNs differ
+    # per worker at collection time, which otherwise fails the collected-set check.
+    ids=["Dataset", "Domain"],
 )
 def test_get_timeline_unauthorized_user_is_denied(urn, entity_label):
     """Unauthorized user must receive an authorization error from getTimeline."""
