@@ -39,11 +39,12 @@ echo "TEST_STRATEGY: $TEST_STRATEGY, BATCH_COUNT: $BATCH_COUNT, BATCH_NUMBER: $B
 
 # When BATCH_COUNT > 1, conftest.py slices modules across matrix jobs (docker-unified).
 # When BATCH_COUNT <= 1 (nightly / local), that slicing is a no-op — use pytest-xdist instead.
-# --dist=loadfile keeps each test module on a single worker to reduce cross-file race risk.
+# --dist=loadgroup keeps most modules on one worker (via xdist_group in conftest.py) while
+# allowing multi-class / chunked parallelism inside the largest files (document, timeline, …).
 xdist_args=()
 if [[ "${BATCH_COUNT:-1}" -le 1 ]]; then
-  echo "BATCH_COUNT=${BATCH_COUNT:-1}: enabling pytest-xdist -n 2 --dist=loadfile"
-  xdist_args=(-n 2 --dist=loadfile)
+  echo "BATCH_COUNT=${BATCH_COUNT:-1}: enabling pytest-xdist -n 2 --dist=loadgroup"
+  xdist_args=(-n 2 --dist=loadgroup)
 fi
 
 # TEST_STRATEGY:

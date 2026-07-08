@@ -246,6 +246,67 @@ def aggregate_module_weights(
     return module_data
 
 
+SMOKE_TEST_ROOT = Path(__file__).parent
+
+# Files large enough to dominate one xdist worker under --dist=loadfile. Each entry
+# uses a finer xdist_group so loadgroup can spread work across workers. Most modules
+# stay on a single group (= one worker), matching loadfile isolation.
+XDIST_SPLITTABLE_FILES: Dict[str, Dict[str, int | str]] = {
+    "tests/knowledge/document_test.py": {"strategy": "chunks", "chunks": 3},
+    "tests/timeline/timeline_change_history_test.py": {"strategy": "class"},
+    "tests/structured_properties/test_structured_properties.py": {
+        "strategy": "chunks",
+        "chunks": 2,
+    },
+    "tests/datapack/test_datapack_smoke.py": {"strategy": "class"},
+}
+
+
+def _relative_test_path(item: Item) -> str:
+    return item.path.relative_to(SMOKE_TEST_ROOT).as_posix()
+
+
+def assign_xdist_groups(config: pytest.Config, items: List[Item]) -> None:
+    numprocesses = getattr(config.option, "numprocesses", 0)
+    dist = getattr(config.option, "dist", "no")
+    if not numprocesses or dist != "loadgroup":
+        return
+
+    by_file: Dict[str, List[Item]] = defaultdict(list)
+    for item in items:
+        by_file[_relative_test_path(item)].append(item)
+
+    splittable_count = 0
+    for rel_path, file_items in by_file.items():
+        split_cfg = XDIST_SPLITTABLE_FILES.get(rel_path)
+        if split_cfg is None:
+            for item in file_items:
+                item.add_marker(pytest.mark.xdist_group(rel_path))
+            continue
+
+        splittable_count += 1
+        strategy = split_cfg["strategy"]
+        if strategy == "class":
+            for item in file_items:
+                item_cls = getattr(item, "cls", None)
+                cls = item_cls.__name__ if item_cls is not None else "module"
+                item.add_marker(pytest.mark.xdist_group(f"{rel_path}::{cls}"))
+        elif strategy == "chunks":
+            n_chunks = int(split_cfg["chunks"])
+            total = len(file_items)
+            for idx, item in enumerate(file_items):
+                chunk = min(idx * n_chunks // total, n_chunks - 1)
+                item.add_marker(pytest.mark.xdist_group(f"{rel_path}::chunk{chunk}"))
+        else:
+            raise ValueError(f"Unknown xdist split strategy: {strategy}")
+
+    logger.info(
+        "Assigned xdist_group markers for %s module(s) (%s splittable) across loadgroup workers",
+        len(by_file),
+        splittable_count,
+    )
+
+
 def pytest_collection_modifyitems(
     session: pytest.Session, config: pytest.Config, items: List[Item]
 ) -> None:
@@ -285,6 +346,7 @@ def pytest_collection_modifyitems(
                 f"RETRY MODE: Running {len(filtered_items)} tests from {len(filtered_modules)} failed module(s)"
             )
             items[:] = filtered_items
+            assign_xdist_groups(config, items)
             return
         except Exception as e:
             logger.warning(
@@ -299,7 +361,7 @@ def pytest_collection_modifyitems(
     batch_number = int(batch_number_env)
 
     if batch_count <= 1:
-        # No batching needed
+        assign_xdist_groups(config, items)
         return
 
     # Load test weights
