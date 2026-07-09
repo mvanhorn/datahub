@@ -291,7 +291,7 @@ def test_system_info_authenticated_non_admin_user_returns_403(auth_session):
 
     try:
         # Create a limited-privilege user (no special privileges by default)
-        create_user(admin_session, limited_test_email, "testpass123")
+        admin_session = create_user(admin_session, limited_test_email, "testpass123")
         pat_policy_urn = create_user_policy(
             test_user_urn, ["GENERATE_PERSONAL_ACCESS_TOKENS"], admin_session
         )

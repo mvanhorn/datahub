@@ -129,8 +129,12 @@ def custom_user_setup():
 
 
 @pytest.fixture(autouse=True)
-def access_token_setup(auth_session, suite_token_filter):
-    """Revoke only this suite's tokens so parallel workers do not interfere."""
+def access_token_setup(suite_token_filter):
+    """Revoke only this suite's tokens so parallel workers do not interfere.
+
+    Must not depend on auth_session: chaining a function-scoped autouse fixture
+    through session-scoped auth_session breaks pytest finalizer setup under xdist.
+    """
     admin_session = login_as(admin_user, admin_pass)
 
     revoke_tokens_matching(admin_session, suite_token_filter)

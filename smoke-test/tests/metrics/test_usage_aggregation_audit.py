@@ -38,7 +38,6 @@ from tests.metrics.usage_aggregation_metrics import (
     generate_openapi_metadata_read_traffic,
     generate_openapi_search_traffic,
     graphql_metadata_query_tags,
-    make_support_actor_user,
     parse_prometheus_tags,
     parse_sample_value,
     resolve_usage_actor_class,
@@ -264,13 +263,13 @@ class TestUsageAggregationByteMetrics:
     ):
         """Single GraphQL response should contribute output_bytes ~= body length, not ~2x.
 
-        Uses a dedicated support user so actor_class=support isolates this test from
+        Uses a dedicated regular user so actor_class=regular isolates this test from
         admin (system) GraphQL traffic elsewhere in the pytest batch.
         """
         gms_url = _require_prometheus_url()
         if not can_provision_native_users(auth_session):
             pytest.skip(
-                "Session lacks manageIdentities — cannot provision a support user locally"
+                "Session lacks manageIdentities — cannot provision a regular user locally"
             )
 
         from tests.metrics.usage_aggregation_metrics import (
@@ -278,15 +277,15 @@ class TestUsageAggregationByteMetrics:
             execute_graphql_raw,
         )
 
-        user_urn, support_session = make_support_actor_user(
+        user_urn, regular_session = make_step_actor_user(
             auth_session, "usage-output-dedup"
         )
-        tags = graphql_metadata_query_tags("support")
+        tags = graphql_metadata_query_tags("regular")
         try:
             output_baseline = fetch_metric_total(
                 auth_session, gms_url, OUTPUT_BYTES_METRIC, tags
             )
-            response_text = execute_graphql_raw(support_session, _ME_QUERY)
+            response_text = execute_graphql_raw(regular_session, _ME_QUERY)
             response_len = len(response_text)
             assert response_len > 0
 
@@ -302,7 +301,7 @@ class TestUsageAggregationByteMetrics:
                 f"output_bytes delta {delta} far exceeds response length {response_len}"
             )
         finally:
-            support_session.destroy()
+            regular_session.destroy()
             cleanup_step_actor_user(auth_session, user_urn)
 
     def test_usage_aggregation_openapi_search_output_bytes(self, auth_session):
