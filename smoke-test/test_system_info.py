@@ -292,8 +292,13 @@ def test_system_info_authenticated_non_admin_user_returns_403(auth_session):
     try:
         # Create a limited-privilege user (no special privileges by default)
         admin_session = create_user(admin_session, limited_test_email, "testpass123")
+        # Name must not start with "Test Policy" (privileges suite clears that prefix).
         pat_policy_urn = create_user_policy(
-            test_user_urn, ["GENERATE_PERSONAL_ACCESS_TOKENS"], admin_session
+            test_user_urn,
+            ["GENERATE_PERSONAL_ACCESS_TOKENS"],
+            admin_session,
+            name="System Info PAT Policy",
+            description="PAT privilege for system-info authorization smoke test",
         )
 
         # Login as the limited user

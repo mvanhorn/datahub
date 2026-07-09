@@ -446,15 +446,28 @@ def create_metadata_policy(
     return res_data["data"]["createPolicy"]
 
 
-def create_user_policy(user_urn, privileges, session):
+def create_user_policy(
+    user_urn,
+    privileges,
+    session,
+    *,
+    name: str = "Test Policy Name",
+    description: str = "Test Policy Description",
+):
+    """Create a platform policy for a single user.
+
+    Callers that must survive privileges-suite cleanup should pass a ``name`` that
+    does **not** start with ``Test Policy`` — ``clear_polices(name_prefix=\"Test Policy\")``
+    deletes those policies under xdist.
+    """
     policy = {
         "query": """mutation createPolicy($input: PolicyUpdateInput!) {\n
             createPolicy(input: $input) }""",
         "variables": {
             "input": {
                 "type": "PLATFORM",
-                "name": "Test Policy Name",
-                "description": "Test Policy Description",
+                "name": name,
+                "description": description,
                 "state": "ACTIVE",
                 "resources": {"filter": {"criteria": []}},
                 "privileges": privileges,

@@ -12,11 +12,10 @@ from tests.utils import (
 
 from .token_utils import (
     assert_graphql_mutation_succeeded,
-    assert_no_tokens_matching,
     listUsers,
     removeUser,
-    revoke_tokens_matching,
     token_name_filter,
+    wait_for_no_tokens_matching,
     wait_for_user_in_list,
 )
 
@@ -30,13 +29,14 @@ os.environ["DATAHUB_TELEMETRY_ENABLED"] = "false"
 REVOKE_SUITE_USER_EMAIL = "revokable.access@smoke.datahub.test"
 REVOKE_SUITE_USER_URN = f"urn:li:corpuser:{REVOKE_SUITE_USER_EMAIL}"
 REVOKE_SUITE_TOKEN_NAME = "revokable-suite-token"
+# Must not start with "Test Policy" — privileges suite clears that prefix under xdist.
+REVOKE_SUITE_PAT_POLICY_NAME = "Revokable Access Token PAT Policy"
 SUITE_TOKEN_FILTER = [token_name_filter(REVOKE_SUITE_TOKEN_NAME)]
 
 
 def _ensure_no_suite_tokens() -> None:
     admin_session = login_as(admin_user, admin_pass)
-    revoke_tokens_matching(admin_session, SUITE_TOKEN_FILTER)
-    assert_no_tokens_matching(admin_session, SUITE_TOKEN_FILTER)
+    wait_for_no_tokens_matching(admin_session, SUITE_TOKEN_FILTER)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -103,7 +103,11 @@ def custom_user_setup():
     ]
 
     pat_policy_urn = create_user_policy(
-        REVOKE_SUITE_USER_URN, ["GENERATE_PERSONAL_ACCESS_TOKENS"], admin_session
+        REVOKE_SUITE_USER_URN,
+        ["GENERATE_PERSONAL_ACCESS_TOKENS"],
+        admin_session,
+        name=REVOKE_SUITE_PAT_POLICY_NAME,
+        description="PAT privilege for revokable access token smoke suite",
     )
 
     _ensure_no_suite_tokens()

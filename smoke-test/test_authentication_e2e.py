@@ -32,7 +32,13 @@ from typing import Tuple
 import pytest
 import requests
 
-from tests.privileges.utils import create_user, remove_user
+from tests.privileges.utils import (
+    create_user,
+    create_user_policy,
+    remove_policy,
+    remove_user,
+)
+from tests.tokens.token_utils import assert_graphql_mutation_succeeded
 from tests.utils import (
     TestSessionWrapper,
     get_admin_credentials,
@@ -90,7 +96,9 @@ def extract_api_token_from_session(session: TestSessionWrapper) -> Tuple[str, st
     response = session.post(f"{get_frontend_url()}/api/v2/graphql", json=json_payload)
     response.raise_for_status()
 
-    token_data = response.json()["data"]["createAccessToken"]
+    res_data = response.json()
+    assert_graphql_mutation_succeeded(res_data)
+    token_data = res_data["data"]["createAccessToken"]
     return token_data["accessToken"], token_data["metadata"]["id"]
 
 
@@ -355,10 +363,20 @@ def test_admin_endpoints_require_privileges(auth_session) -> None:
     limited_auth_email = "limited.auth.test@smoke.datahub.test"
     test_user_urn = f"urn:li:corpuser:{limited_auth_email}"
     token_id = None
+    pat_policy_urn = None
+    limited_session = None
 
     try:
-        # Create limited user
-        create_user(admin_session, limited_auth_email, "testpass123")
+        # Create limited user (returns a fresh admin session after /signUp)
+        admin_session = create_user(admin_session, limited_auth_email, "testpass123")
+        # Explicit PAT privilege; name must not start with "Test Policy".
+        pat_policy_urn = create_user_policy(
+            test_user_urn,
+            ["GENERATE_PERSONAL_ACCESS_TOKENS"],
+            admin_session,
+            name="Auth E2E PAT Policy",
+            description="PAT privilege for authentication e2e privilege checks",
+        )
 
         # Login as limited user and get API token
         limited_session = login_as(limited_auth_email, "testpass123")
@@ -383,10 +401,12 @@ def test_admin_endpoints_require_privileges(auth_session) -> None:
     finally:
         # Cleanup
         try:
-            if token_id:
+            if token_id and limited_session is not None:
                 revoke_api_token(limited_session, token_id)
             # Remove test user
             admin_cleanup_session = login_as(admin_user, admin_pass)
+            if pat_policy_urn:
+                remove_policy(pat_policy_urn, admin_cleanup_session)
             remove_user(admin_cleanup_session, test_user_urn)
             logger.info("✅ Test user cleaned up successfully")
         except Exception as e:

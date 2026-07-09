@@ -64,6 +64,35 @@ def revoke_tokens_matching(session, filters: List[Dict[str, Any]]) -> None:
         wait_for_writes_to_sync()
 
 
+def wait_for_no_tokens_matching(
+    session,
+    filters: List[Dict[str, Any]],
+    *,
+    max_timeout_in_sec: int = 60,
+) -> None:
+    """Revoke matching tokens and poll until listAccessTokens is empty.
+
+    Token search is ES-backed; revoke + wait_for_writes_to_sync is not always
+    enough under xdist load before the next assertion.
+    """
+    start = time.time()
+    last_total: int | None = None
+    while time.time() - start < max_timeout_in_sec:
+        revoke_tokens_matching(session, filters)
+        res_data = list_access_tokens(session, filters)
+        assert res_data
+        assert res_data["data"]
+        listing = res_data["data"]["listAccessTokens"]
+        last_total = listing["total"]
+        if last_total == 0 and not listing["tokens"]:
+            return
+        time.sleep(1)
+    raise AssertionError(
+        f"Timed out waiting for tokens matching {filters} to clear after "
+        f"{max_timeout_in_sec}s (last total={last_total})"
+    )
+
+
 def assert_no_tokens_matching(session, filters: List[Dict[str, Any]]) -> None:
     res_data = list_access_tokens(session, filters)
     assert res_data

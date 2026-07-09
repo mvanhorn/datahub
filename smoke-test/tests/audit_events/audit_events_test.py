@@ -7,10 +7,10 @@ import pytest
 
 from tests.tokens.token_utils import (
     assert_graphql_mutation_succeeded,
-    assert_no_tokens_matching,
     removeUser,
     revoke_tokens_matching,
     token_name_filter,
+    wait_for_no_tokens_matching,
     wait_for_user_in_list,
 )
 from tests.utils import (
@@ -108,12 +108,11 @@ def custom_user_setup():
 
 
 @pytest.fixture(autouse=True)
-def access_token_setup(auth_session, suite_token_filter):
+def access_token_setup(suite_token_filter):
     """Revoke only this suite's tokens so parallel workers do not interfere."""
     admin_session = login_as(admin_user, admin_pass)
 
-    revoke_tokens_matching(admin_session, suite_token_filter)
-    assert_no_tokens_matching(admin_session, suite_token_filter)
+    wait_for_no_tokens_matching(admin_session, suite_token_filter)
 
     yield
 
