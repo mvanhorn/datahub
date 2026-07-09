@@ -66,4 +66,5 @@ public class FeatureFlags {
   private boolean i18nEnabled = false;
   private boolean timeseriesAspectBatchLoadEnabled = true;
   private boolean timeseriesAspectAggBatchLoadEnabled = true;
+  private boolean entityHealthBatchLoadEnabled = false;
 }
