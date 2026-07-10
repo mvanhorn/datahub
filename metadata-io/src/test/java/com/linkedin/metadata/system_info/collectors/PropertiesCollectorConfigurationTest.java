@@ -584,6 +584,7 @@ public class PropertiesCollectorConfigurationTest extends AbstractTestNGSpringCo
           "featureFlags.i18nEnabled",
           "featureFlags.timeseriesAspectBatchLoadEnabled",
           "featureFlags.timeseriesAspectAggBatchLoadEnabled",
+          "featureFlags.datasetStatsSummaryBatchLoadEnabled",
           "featureFlags.themeV2Default",
           "featureFlags.themeV2Enabled",
           "featureFlags.themeV2Toggleable",

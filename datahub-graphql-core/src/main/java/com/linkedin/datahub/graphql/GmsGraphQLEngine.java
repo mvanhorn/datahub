@@ -12,6 +12,7 @@ import com.datahub.authentication.token.StatefulTokenService;
 import com.datahub.authentication.user.NativeUserService;
 import com.datahub.authorization.AuthorizationConfiguration;
 import com.datahub.authorization.role.RoleService;
+import com.github.benmanes.caffeine.cache.Cache;
 import com.google.common.collect.ImmutableList;
 import com.linkedin.common.VersionedUrn;
 import com.linkedin.common.urn.Urn;
@@ -148,6 +149,7 @@ import com.linkedin.datahub.graphql.resolvers.lineage.UpdateLineageResolver;
 import com.linkedin.datahub.graphql.resolvers.load.AspectResolver;
 import com.linkedin.datahub.graphql.resolvers.load.BatchGetEntitiesResolver;
 import com.linkedin.datahub.graphql.resolvers.load.DashboardStatsSummaryBatchLoader;
+import com.linkedin.datahub.graphql.resolvers.load.DatasetStatsSummaryBatchLoader;
 import com.linkedin.datahub.graphql.resolvers.load.EntityLineageResultResolver;
 import com.linkedin.datahub.graphql.resolvers.load.EntityRelationshipsResultResolver;
 import com.linkedin.datahub.graphql.resolvers.load.EntityTypeBatchResolver;
@@ -427,6 +429,9 @@ public class GmsGraphQLEngine {
   private final GitVersion gitVersion;
   private final boolean supportsImpactAnalysis;
   private final TimeseriesAspectService timeseriesAspectService;
+  // Shared cache backing the Dataset.statsSummary batch DataLoader (one per engine).
+  private final Cache<Urn, DatasetStatsSummary> datasetStatsSummaryCache =
+      DatasetStatsSummaryBatchLoader.newCache();
   private final TimelineService timelineService;
   private final NativeUserService nativeUserService;
   private final GroupService groupService;
@@ -935,6 +940,11 @@ public class GmsGraphQLEngine {
             DashboardStatsSummaryBatchLoader.LOADER_NAME,
             context ->
                 DashboardStatsSummaryBatchLoader.createDataLoader(timeseriesAspectService, context))
+        .addDataLoader(
+            DatasetStatsSummaryBatchLoader.LOADER_NAME,
+            context ->
+                DatasetStatsSummaryBatchLoader.createDataLoader(
+                    timeseriesAspectService, datasetStatsSummaryCache, context))
         .setGraphQLConfiguration(graphQLConfiguration)
         .setMetricUtils(metricUtils)
         .configureRuntimeWiring(this::configureRuntimeWiring);
@@ -1900,7 +1910,9 @@ public class GmsGraphQLEngine {
                         new DatasetOperationsStatsResolver(timeseriesAspectService))
                     .dataFetcher(
                         "timeseriesCapabilities", new TimeseriesCapabilitiesResolver(entityClient))
-                    .dataFetcher("statsSummary", new DatasetStatsSummaryResolver(this.usageClient))
+                    .dataFetcher(
+                        "statsSummary",
+                        new DatasetStatsSummaryResolver(this.usageClient, featureFlags))
                     .dataFetcher(
                         "health",
                         new EntityHealthResolver(
