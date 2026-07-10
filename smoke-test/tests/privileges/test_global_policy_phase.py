@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -131,3 +132,115 @@ class TestMutatorModuleLock:
         assert global_policy_phase._is_last_test_in_module(item_a1, None)
         assert global_policy_phase._is_last_test_in_module(item_a1, item_b)
         assert not global_policy_phase._is_last_test_in_module(item_a1, item_a2)
+
+
+def _make_collection_item(
+    *,
+    is_mutator: bool = False,
+    is_skip: bool = False,
+) -> SimpleNamespace:
+    def get_closest_marker(name: str) -> object | None:
+        if name == "global_policy_mutator" and is_mutator:
+            return pytest.mark.global_policy_mutator
+        if name == "skip" and is_skip:
+            return pytest.mark.skip
+        return None
+
+    return SimpleNamespace(get_closest_marker=get_closest_marker)
+
+
+def _make_phase1_teardown_item(
+    nodeid: str,
+    *,
+    skipped_at_setup: bool = False,
+    skipped_at_call: bool = False,
+) -> SimpleNamespace:
+    store: dict[str, object] = {}
+    if skipped_at_setup:
+        store["rep_setup"] = SimpleNamespace(skipped=True)
+    if skipped_at_call:
+        store["rep_call"] = SimpleNamespace(skipped=True)
+    return SimpleNamespace(
+        nodeid=nodeid,
+        get_closest_marker=lambda name: None,
+        _store=store,
+    )
+
+
+class TestPytestCollectionFinishBarrierInit:
+    def test_xdist_worker_does_not_initialize_barrier(
+        self, barrier_paths, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(
+            global_policy_phase.env_vars, "get_test_strategy", lambda: "pytests"
+        )
+        session = SimpleNamespace(
+            items=[_make_collection_item()] * 5,
+            config=SimpleNamespace(
+                getoption=lambda _name: False,
+                workerinput={"workerid": "gw0"},
+            ),
+        )
+
+        global_policy_phase.pytest_collection_finish(cast(pytest.Session, session))
+
+        assert not barrier_paths.remaining.exists()
+        assert not barrier_paths.collection_init.exists()
+
+    def test_controller_initializes_barrier_with_full_batch_count(
+        self, barrier_paths, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(
+            global_policy_phase.env_vars, "get_test_strategy", lambda: "pytests"
+        )
+        session = SimpleNamespace(
+            items=[
+                _make_collection_item(),
+                _make_collection_item(),
+                _make_collection_item(is_mutator=True),
+                _make_collection_item(is_skip=True),
+            ],
+            config=SimpleNamespace(getoption=lambda _name: False),
+        )
+
+        global_policy_phase.pytest_collection_finish(cast(pytest.Session, session))
+
+        assert barrier_paths.remaining.read_text() == "2"
+        assert barrier_paths.collection_init.exists()
+        assert not barrier_paths.complete.exists()
+
+
+class TestPhase1TeardownHook:
+    def test_teardown_decrements_when_skipped_at_setup(
+        self, barrier_paths, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(
+            global_policy_phase.env_vars, "get_test_strategy", lambda: "pytests"
+        )
+        global_policy_phase.init_phase1_barrier(1)
+        item = _make_phase1_teardown_item(
+            "tests/a.py::test_skipif",
+            skipped_at_setup=True,
+        )
+
+        global_policy_phase.pytest_runtest_teardown(cast(pytest.Item, item), None)
+
+        assert barrier_paths.remaining.read_text() == "0"
+        assert barrier_paths.complete.exists()
+
+    def test_teardown_decrements_when_skipped_at_call(
+        self, barrier_paths, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(
+            global_policy_phase.env_vars, "get_test_strategy", lambda: "pytests"
+        )
+        global_policy_phase.init_phase1_barrier(1)
+        item = _make_phase1_teardown_item(
+            "tests/a.py::test_skipif",
+            skipped_at_call=True,
+        )
+
+        global_policy_phase.pytest_runtest_teardown(cast(pytest.Item, item), None)
+
+        assert barrier_paths.remaining.read_text() == "0"
+        assert barrier_paths.complete.exists()

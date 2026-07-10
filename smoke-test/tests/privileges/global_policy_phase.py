@@ -52,16 +52,6 @@ def _is_last_test_in_module(item: Any, nextitem: Any) -> bool:
     return item_module.__name__ != next_module.__name__
 
 
-def _should_count_phase1_test(item: pytest.Item) -> bool:
-    rep_setup = item._store.get("rep_setup", None)  # type: ignore[arg-type]
-    if rep_setup is not None and rep_setup.skipped:
-        return False
-    rep_call = item._store.get("rep_call", None)  # type: ignore[arg-type]
-    if rep_call is not None and rep_call.skipped:
-        return False
-    return True
-
-
 @contextmanager
 def _barrier_exclusive_lock() -> Iterator[None]:
     _BARRIER_DIR.mkdir(parents=True, exist_ok=True)
@@ -102,13 +92,6 @@ def init_phase1_barrier(remaining: int) -> None:
 def _mark_collection_initialized() -> None:
     _BARRIER_DIR.mkdir(parents=True, exist_ok=True)
     _COLLECTION_INIT_FILE.write_text("1")
-
-
-def _ensure_phase1_barrier_initialized(remaining: int) -> None:
-    """Initialize the barrier if collection_finish did not run yet on this worker."""
-    if _COMPLETE_FILE.exists() or _REMAINING_FILE.exists():
-        return
-    init_phase1_barrier(remaining)
 
 
 def _log_missing_barrier_once() -> None:
@@ -245,9 +228,8 @@ def pytest_runtest_teardown(item: pytest.Item, nextitem: Optional[pytest.Item]) 
         _release_mutator_module_if_last(item, nextitem)
         return
 
-    if not _should_count_phase1_test(item):
-        return
-
+    # Decrement even when the test was skipped at setup/call (e.g. skipif). Those
+    # items are included in the controller's phase-1 count at collection time.
     record_phase1_test_completed(item.nodeid)
 
 
@@ -256,6 +238,10 @@ def pytest_collection_finish(session: pytest.Session) -> None:
         return
     if env_vars.get_test_strategy() == "cypress":
         return
+    # xdist workers only see their own subset in session.items; initializing here
+    # would set the barrier to a partial count and race the controller.
+    if hasattr(session.config, "workerinput"):
+        return
 
     phase1_count = sum(
         1
@@ -263,11 +249,8 @@ def pytest_collection_finish(session: pytest.Session) -> None:
         if not item.get_closest_marker("global_policy_mutator")
         and not item.get_closest_marker("skip")
     )
-    _ensure_phase1_barrier_initialized(phase1_count)
+    init_phase1_barrier(phase1_count)
     _mark_collection_initialized()
-
-    if hasattr(session.config, "workerinput"):
-        return
 
     logger.info(
         "Global policy ordering: %s default-policy tests, then %s mutator tests",

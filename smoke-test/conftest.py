@@ -176,6 +176,82 @@ def bin_pack_tasks(tasks, n_buckets):
     return buckets
 
 
+def _module_is_global_policy_mutator(module_items: List[Item]) -> bool:
+    return any(
+        item.get_closest_marker("global_policy_mutator") is not None
+        for item in module_items
+    )
+
+
+def _module_path_is_zdu_smoke(module_path: str) -> bool:
+    normalized = module_path.replace("\\", "/")
+    return "/tests/zdu/" in normalized
+
+
+def _batch_module_weight(
+    batch_modules: List[str], module_weights: Dict[str, float]
+) -> float:
+    return sum(module_weights.get(module_path, 0.0) for module_path in batch_modules)
+
+
+def _rebalance_batches_avoid_mutator_zdu_overlap(
+    module_batches: List[List[str]],
+    module_map: Dict[str, List[Item]],
+    module_weights: Dict[str, float],
+) -> List[List[str]]:
+    """Keep policy mutators out of batches that also run tests/zdu/ modules."""
+    batches = [list(batch) for batch in module_batches]
+    n_buckets = len(batches)
+
+    def batch_has_mutator(batch_idx: int) -> bool:
+        return any(
+            _module_is_global_policy_mutator(module_map[module_path])
+            for module_path in batches[batch_idx]
+            if module_path in module_map
+        )
+
+    moved: List[Tuple[str, int, int]] = []
+    for batch_idx in range(n_buckets):
+        if not batch_has_mutator(batch_idx):
+            continue
+        zdu_modules = [
+            module_path
+            for module_path in batches[batch_idx]
+            if _module_path_is_zdu_smoke(module_path) and module_path in module_map
+        ]
+        for zdu_module in zdu_modules:
+            candidates = [
+                idx
+                for idx in range(n_buckets)
+                if idx != batch_idx and not batch_has_mutator(idx)
+            ]
+            if not candidates:
+                logger.warning(
+                    "Batch %s: could not relocate zdu module %s away from policy mutators",
+                    batch_idx,
+                    zdu_module,
+                )
+                continue
+            target_idx = min(
+                candidates,
+                key=lambda idx: _batch_module_weight(batches[idx], module_weights),
+            )
+            batches[batch_idx].remove(zdu_module)
+            batches[target_idx].append(zdu_module)
+            moved.append((zdu_module, batch_idx, target_idx))
+
+    for zdu_module, source_batch, target_batch in moved:
+        logger.info(
+            "Rebalanced batching: moved %s from batch %s to batch %s "
+            "(avoid global_policy_mutator + zdu overlap)",
+            zdu_module,
+            source_batch,
+            target_batch,
+        )
+
+    return batches
+
+
 def load_pytest_test_weights() -> Dict[str, float]:
     """
     Load pytest test weights from JSON file.
@@ -323,6 +399,9 @@ def pytest_collection_modifyitems(
     module_map = {
         module_path: module_items for module_path, module_items, _ in module_data
     }
+    module_weights = {
+        module_path: total_weight for module_path, _, total_weight in module_data
+    }
     weighted_modules = [
         (module_path, total_weight) for module_path, _, total_weight in module_data
     ]
@@ -333,6 +412,9 @@ def pytest_collection_modifyitems(
 
     # Apply bin-packing to modules
     module_batches = bin_pack_tasks(weighted_modules, batch_count)
+    module_batches = _rebalance_batches_avoid_mutator_zdu_overlap(
+        module_batches, module_map, module_weights
+    )
 
     # Get the modules for this batch
     selected_modules = module_batches[batch_number]
