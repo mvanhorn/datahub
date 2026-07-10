@@ -61,6 +61,12 @@ class TestInitPhase1Barrier:
 
 
 class TestRecordPhase1TestCompleted:
+    def test_no_op_when_barrier_not_initialized(self, barrier_paths) -> None:
+        global_policy_phase.record_phase1_test_completed("tests/a.py::test_one")
+
+        assert not barrier_paths.remaining.exists()
+        assert not barrier_paths.complete.exists()
+
     def test_decrements_remaining_and_marks_complete(self, barrier_paths) -> None:
         global_policy_phase.init_phase1_barrier(2)
 

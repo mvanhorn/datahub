@@ -70,6 +70,13 @@ def init_phase1_barrier(remaining: int) -> None:
             _COMPLETE_FILE.write_text("1")
 
 
+def _ensure_phase1_barrier_initialized(remaining: int) -> None:
+    """Initialize the barrier if collection_finish did not run yet on this worker."""
+    if _COMPLETE_FILE.exists() or _REMAINING_FILE.exists():
+        return
+    init_phase1_barrier(remaining)
+
+
 def wait_for_phase1_complete() -> None:
     deadline = time.monotonic() + _PHASE1_WAIT_TIMEOUT_SECONDS
     next_log_at = time.monotonic()
@@ -99,6 +106,10 @@ def wait_for_phase1_complete() -> None:
 
 def record_phase1_test_completed(nodeid: str) -> None:
     with _barrier_exclusive_lock():
+        if not _REMAINING_FILE.exists():
+            return
+        if _COMPLETE_FILE.exists():
+            return
         counted = (
             set(_COUNTED_FILE.read_text().splitlines())
             if _COUNTED_FILE.exists() and _COUNTED_FILE.read_text().strip()
@@ -148,15 +159,16 @@ def pytest_collection_finish(session: pytest.Session) -> None:
         return
     if env_vars.get_test_strategy() == "cypress":
         return
-    if hasattr(session.config, "workerinput"):
-        return
 
     phase1_count = sum(
         1
         for item in session.items
         if not item.get_closest_marker("global_policy_mutator")
     )
-    init_phase1_barrier(phase1_count)
+    _ensure_phase1_barrier_initialized(phase1_count)
+    if hasattr(session.config, "workerinput"):
+        return
+
     logger.info(
         "Global policy ordering: %s default-policy tests, then %s mutator tests",
         phase1_count,
