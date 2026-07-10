@@ -4,7 +4,7 @@ import os
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Tuple
 
 import pytest
 
@@ -20,6 +20,7 @@ _BARRIER_LOCK_FILE = _BARRIER_DIR / "barrier.lock"
 _MUTATOR_LOCK_FILE = _BARRIER_DIR / "mutator.lock"
 
 _PHASE1_WAIT_TIMEOUT_SECONDS = 3600.0
+_PHASE1_WAIT_LOG_INTERVAL_SECONDS = 60.0
 
 
 def module_has_global_policy_mutator_marker(module: Any) -> bool:
@@ -43,24 +44,56 @@ def _barrier_exclusive_lock() -> Iterator[None]:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
+def _phase1_barrier_status() -> Tuple[int, int]:
+    with _barrier_exclusive_lock():
+        if not _REMAINING_FILE.exists():
+            return -1, 0
+        remaining = int(_REMAINING_FILE.read_text().strip() or "0")
+        counted = (
+            len(_COUNTED_FILE.read_text().splitlines())
+            if _COUNTED_FILE.exists() and _COUNTED_FILE.read_text().strip()
+            else 0
+        )
+        return remaining, counted
+
+
 def init_phase1_barrier(remaining: int) -> None:
     with _barrier_exclusive_lock():
+        if _COMPLETE_FILE.exists():
+            return
+        if _REMAINING_FILE.exists():
+            return
+
         _REMAINING_FILE.write_text(str(remaining))
         _COUNTED_FILE.write_text("")
         if remaining <= 0:
             _COMPLETE_FILE.write_text("1")
-        elif _COMPLETE_FILE.exists():
-            _COMPLETE_FILE.unlink()
 
 
 def wait_for_phase1_complete() -> None:
     deadline = time.monotonic() + _PHASE1_WAIT_TIMEOUT_SECONDS
+    next_log_at = time.monotonic()
     while time.monotonic() < deadline:
         if _COMPLETE_FILE.exists():
             return
+        now = time.monotonic()
+        if now >= next_log_at:
+            remaining, completed = _phase1_barrier_status()
+            worker = os.getenv("PYTEST_XDIST_WORKER", "main")
+            logger.info(
+                "Waiting for global policy phase 1 (worker=%s, remaining=%s, completed=%s)",
+                worker,
+                remaining,
+                completed,
+            )
+            next_log_at = now + _PHASE1_WAIT_LOG_INTERVAL_SECONDS
         time.sleep(0.25)
+
+    remaining, completed = _phase1_barrier_status()
+    worker = os.getenv("PYTEST_XDIST_WORKER", "main")
     raise TimeoutError(
-        "Timed out waiting for default global policy smoke tests to finish"
+        "Timed out waiting for default global policy smoke tests to finish "
+        f"(worker={worker}, remaining={remaining}, completed={completed})"
     )
 
 
@@ -98,11 +131,10 @@ def global_policy_mutator_lock() -> Iterator[None]:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
-@pytest.fixture(scope="module", autouse=True)
-def global_policy_mutator_module_gate(request):
-    """After default-policy tests finish, run mutator modules one at a time."""
-    module = request.module
-    if not module_has_global_policy_mutator_marker(module):
+@pytest.fixture(autouse=True, scope="function")
+def global_policy_mutator_gate(request):
+    """After default-policy tests finish, run mutator tests one at a time."""
+    if not request.node.get_closest_marker("global_policy_mutator"):
         yield
         return
 
@@ -115,6 +147,8 @@ def pytest_collection_finish(session: pytest.Session) -> None:
     if session.config.getoption("collectonly"):
         return
     if env_vars.get_test_strategy() == "cypress":
+        return
+    if hasattr(session.config, "workerinput"):
         return
 
     phase1_count = sum(
