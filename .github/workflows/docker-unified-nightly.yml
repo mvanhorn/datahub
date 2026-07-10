@@ -13,6 +13,11 @@ on:
         required: false
         default: false
         type: boolean
+      pytest_xdist_workers:
+        description: "pytest-xdist worker count per smoke-test matrix job (0 disables xdist)"
+        required: false
+        default: "3"
+        type: string
   schedule:
     - cron: "0 8 * * *" # Run at midnight Pacific time (8 AM UTC) every day
 
@@ -29,6 +34,7 @@ env:
   DOCKER_CACHE: "DEPOT"
   DEPOT_PROJECT_ID: "${{ vars.DEPOT_PROJECT_ID }}"
   DEPOT_TOKEN: "${{ secrets.DEPOT_TOKEN }}"
+  PYTEST_XDIST_WORKERS: "${{ github.event.inputs.pytest_xdist_workers || '3' }}"
 
 permissions:
   contents: read
@@ -414,9 +420,10 @@ jobs:
           DATAHUB_VERSION: ${{ needs.setup.outputs.tag }}
           CLEANUP_DATA: "false"
           TEST_STRATEGY: ${{ matrix.test_strategy }}
-          # BATCH_COUNT=1 skips matrix module slicing; smoke.sh uses that to enable pytest-xdist (-n 3 --dist=loadscope).
+          # Parallelism is profile×arch matrix jobs, not BATCH_COUNT slicing — run the full suite per cell.
           BATCH_COUNT: "1"
           BATCH_NUMBER: "0"
+          PYTEST_XDIST_WORKERS: ${{ env.PYTEST_XDIST_WORKERS }}
           FILTERED_TESTS: ${{ steps.parse-pytest-failures.outputs.filtered_tests_file || '' }}
           DATAHUB_SMOKETEST_EXECUTOR_ID: "${{ github.sha }}-${{ matrix.test_strategy }}-${{ matrix.architecture }}"
           PROFILE_NAME: ${{ matrix.profile }}

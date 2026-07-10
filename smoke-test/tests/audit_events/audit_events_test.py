@@ -39,7 +39,7 @@ def suite_token_filter():
     return [token_name_filter(AUDIT_SUITE_TOKEN_NAME)]
 
 
-@pytest.fixture(scope="class", autouse=True)
+@pytest.fixture(scope="module", autouse=True)
 def custom_user_setup():
     admin_session = login_as(admin_user, admin_pass)
     try:

@@ -454,12 +454,7 @@ def create_user_policy(
     name: str = "Test Policy Name",
     description: str = "Test Policy Description",
 ):
-    """Create a platform policy for a single user.
-
-    Callers that must survive privileges-suite cleanup should pass a ``name`` that
-    does **not** start with ``Test Policy`` — ``clear_polices(name_prefix=\"Test Policy\")``
-    deletes those policies under xdist.
-    """
+    """Create a platform policy for a single user."""
     policy = {
         "query": """mutation createPolicy($input: PolicyUpdateInput!) {\n
             createPolicy(input: $input) }""",

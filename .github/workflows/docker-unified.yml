@@ -12,6 +12,11 @@ on:
         required: false
         default: "5"
         type: string
+      pytest_xdist_workers:
+        description: "pytest-xdist worker count per smoke-test matrix job (0 disables xdist)"
+        required: false
+        default: "3"
+        type: string
   push:
     branches:
       - master
@@ -51,6 +56,7 @@ env:
   IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
   DEPOT_TOKEN: "${{ secrets.DEPOT_TOKEN }}"
   PLAYWRIGHT_SHARD_COUNT: "8"
+  PYTEST_XDIST_WORKERS: "${{ github.event.inputs.pytest_xdist_workers || '3' }}"
 
 permissions:
   contents: read
@@ -769,6 +775,7 @@ jobs:
           TEST_STRATEGY: pytests
           BATCH_COUNT: ${{ matrix.batch_count }}
           BATCH_NUMBER: ${{ matrix.batch }}
+          PYTEST_XDIST_WORKERS: ${{ env.PYTEST_XDIST_WORKERS }}
           FILTERED_TESTS: ${{ steps.retry-check.outputs.filtered_tests_file || '' }}
         run: |
           if [[ -n "$FILTERED_TESTS" && -f "$FILTERED_TESTS" ]]; then

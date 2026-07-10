@@ -24,7 +24,6 @@ from datahub.metadata.schema_classes import (
 from datahub.metadata.urns import CorpUserUrn, QueryUrn
 from tests.authorization.utils import is_view_authorization_enabled
 from tests.consistency_utils import wait_for_writes_to_sync
-from tests.privileges.global_policy_lock import global_policy_state_lock
 from tests.privileges.utils import (
     clear_polices,
     create_metadata_policy,
@@ -44,7 +43,7 @@ from tests.utils import (
 
 logger = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.no_cypress_suite1
+pytestmark = [pytest.mark.no_cypress_suite1, pytest.mark.global_policy_mutator]
 
 _UNIQUE = uuid.uuid4().hex[:8]
 TEST_USER_EMAIL = f"query.auth.test.{_UNIQUE}@smoke.datahub.test"
@@ -77,8 +76,7 @@ QUERY_AUTH_POLICY_PREFIXES = ["Test VIEW", "Test EDIT_ENTITY_QUERIES"]
 
 @pytest.fixture(scope="module", autouse=True)
 def query_auth_setup(graph_client, auth_session):
-    with global_policy_state_lock():
-        yield from _query_auth_setup_impl(graph_client, auth_session)
+    yield from _query_auth_setup_impl(graph_client, auth_session)
 
 
 def _query_auth_setup_impl(graph_client, auth_session):

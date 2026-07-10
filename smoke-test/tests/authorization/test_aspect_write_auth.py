@@ -21,7 +21,6 @@ from datahub.metadata.schema_classes import (
     StringTypeClass,
 )
 from tests.consistency_utils import wait_for_writes_to_sync
-from tests.privileges.global_policy_lock import global_policy_state_lock
 from tests.privileges.utils import (
     clear_polices,
     create_metadata_policy,
@@ -43,7 +42,7 @@ from tests.utils import (
 
 logger = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.no_cypress_suite1
+pytestmark = [pytest.mark.no_cypress_suite1, pytest.mark.global_policy_mutator]
 
 _UNIQUE = uuid.uuid4().hex[:8]
 TEST_USER_EMAIL = f"aspect.auth.test.{_UNIQUE}@smoke.datahub.test"
@@ -147,8 +146,7 @@ ASPECT_WRITE_POLICY_PREFIXES = ["Test EDIT_ENTITY", "Test MANAGE_DATA_PRODUCTS"]
 
 @pytest.fixture(scope="module", autouse=True)
 def auth_test_setup(graph_client, auth_session):
-    with global_policy_state_lock():
-        yield from _auth_test_setup_impl(graph_client, auth_session)
+    yield from _auth_test_setup_impl(graph_client, auth_session)
 
 
 def _auth_test_setup_impl(graph_client, auth_session):

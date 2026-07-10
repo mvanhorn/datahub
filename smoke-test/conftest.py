@@ -1,4 +1,4 @@
-pytest_plugins = ["tests.utilities.agent_reporter"]
+pytest_plugins = ["tests.utilities.agent_reporter", "tests.privileges.global_policy_phase"]
 
 import json
 import logging
@@ -246,6 +246,12 @@ def aggregate_module_weights(
     return module_data
 
 
+def _order_global_policy_mutators_last(items: List[Item]) -> None:
+    items.sort(
+        key=lambda item: item.get_closest_marker("global_policy_mutator") is not None
+    )
+
+
 def pytest_collection_modifyitems(
     session: pytest.Session, config: pytest.Config, items: List[Item]
 ) -> None:
@@ -285,6 +291,7 @@ def pytest_collection_modifyitems(
                 f"RETRY MODE: Running {len(filtered_items)} tests from {len(filtered_modules)} failed module(s)"
             )
             items[:] = filtered_items
+            _order_global_policy_mutators_last(items)
             return
         except Exception as e:
             logger.warning(
@@ -299,6 +306,7 @@ def pytest_collection_modifyitems(
     batch_number = int(batch_number_env)
 
     if batch_count <= 1:
+        _order_global_policy_mutators_last(items)
         return
 
     # Load test weights
@@ -341,3 +349,4 @@ def pytest_collection_modifyitems(
 
     # Replace items with the filtered list
     items[:] = selected_items
+    _order_global_policy_mutators_last(items)

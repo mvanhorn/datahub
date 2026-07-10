@@ -37,14 +37,14 @@ source ./set-test-env-vars.sh
 
 echo "TEST_STRATEGY: $TEST_STRATEGY, BATCH_COUNT: $BATCH_COUNT, BATCH_NUMBER: $BATCH_NUMBER"
 
-# When BATCH_COUNT > 1, conftest.py slices modules across matrix jobs (docker-unified).
-# When BATCH_COUNT <= 1 (nightly / local), that slicing is a no-op — use pytest-xdist instead.
-# --dist=loadscope groups by class (or whole module when tests are module-level functions).
-# Heavy modules split into multiple test classes can parallelize across workers.
+# PYTEST_XDIST_WORKERS: optional pytest-xdist worker count (workflows set this, e.g. 3).
+# Independent of BATCH_COUNT/BATCH_NUMBER — matrix batching and xdist are orthogonal knobs.
+# --dist=loadscope groups by class (or whole module for module-level tests).
+# Global policy mutators are ordered after default-policy tests via conftest phase barrier.
 xdist_args=()
-if [[ "${BATCH_COUNT:-1}" -le 1 ]]; then
-  echo "BATCH_COUNT=${BATCH_COUNT:-1}: enabling pytest-xdist -n 3 --dist=loadscope"
-  xdist_args=(-n 3 --dist=loadscope)
+if [[ "${PYTEST_XDIST_WORKERS:-0}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "PYTEST_XDIST_WORKERS=${PYTEST_XDIST_WORKERS}: enabling pytest-xdist -n ${PYTEST_XDIST_WORKERS} --dist=loadscope"
+  xdist_args=(-n "${PYTEST_XDIST_WORKERS}" --dist=loadscope)
 fi
 
 # TEST_STRATEGY:

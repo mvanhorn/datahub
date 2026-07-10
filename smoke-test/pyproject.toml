@@ -85,6 +85,7 @@ markers = [
     "read_only: marks tests as read only (deselect with '-m \"not read_only\"')",
     "no_cypress_suite1: main smoke tests, suite 1",
     "test_run_cypress: run cypress tests",
+    "global_policy_mutator: module disables shared All Users policies; declare on mutator test modules",
 ]
 filterwarnings = [
     # Ignore some warnings that come from dependencies.

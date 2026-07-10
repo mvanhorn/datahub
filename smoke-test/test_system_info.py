@@ -3,18 +3,14 @@ import logging
 import pytest
 import requests
 
-from tests.privileges.utils import (
-    create_user,
-    create_user_policy,
-    remove_policy,
-    remove_user,
-)
+from tests.privileges.utils import create_user, remove_user
 from tests.tokens.token_utils import assert_graphql_mutation_succeeded
 from tests.utils import get_admin_credentials, get_frontend_url, get_gms_url, login_as
 
 logger = logging.getLogger(__name__)
 
 pytestmark = pytest.mark.no_cypress_suite1
+
 
 # ==============================================
 # SYSTEM INFO API TESTS
@@ -286,20 +282,11 @@ def test_system_info_authenticated_non_admin_user_returns_403(auth_session):
     limited_test_email = "limited.test.user@smoke.datahub.test"
     test_user_urn = f"urn:li:corpuser:{limited_test_email}"
     token_id = None
-    pat_policy_urn = None
     limited_user_session = None
 
     try:
         # Create a limited-privilege user (no special privileges by default)
-        admin_session = create_user(admin_session, limited_test_email, "testpass123")
-        # Name must not start with "Test Policy" (privileges suite clears that prefix).
-        pat_policy_urn = create_user_policy(
-            test_user_urn,
-            ["GENERATE_PERSONAL_ACCESS_TOKENS"],
-            admin_session,
-            name="System Info PAT Policy",
-            description="PAT privilege for system-info authorization smoke test",
-        )
+        create_user(admin_session, limited_test_email, "testpass123")
 
         # Login as the limited user
         limited_user_session = login_as(limited_test_email, "testpass123")
@@ -357,8 +344,6 @@ def test_system_info_authenticated_non_admin_user_returns_403(auth_session):
 
             # Remove the test user
             admin_cleanup_session = login_as(admin_user, admin_pass)
-            if pat_policy_urn:
-                remove_policy(pat_policy_urn, admin_cleanup_session)
             remove_user(admin_cleanup_session, test_user_urn)
             logger.info("✓ Test user and token cleaned up successfully")
         except Exception as e:

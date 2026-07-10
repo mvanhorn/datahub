@@ -20,7 +20,6 @@ from datahub.metadata.schema_classes import (
     DomainPropertiesClass,
 )
 from tests.consistency_utils import wait_for_writes_to_sync
-from tests.privileges.global_policy_lock import global_policy_state_lock
 from tests.privileges.utils import (
     clear_polices,
     create_user,
@@ -33,7 +32,7 @@ from tests.utils import get_frontend_session, get_frontend_url, login_as
 
 logger = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.no_cypress_suite1
+pytestmark = [pytest.mark.no_cypress_suite1, pytest.mark.global_policy_mutator]
 
 # ---------------------------------------------------------------------------
 # Constants — unique per test run so the test is idempotent
@@ -77,8 +76,7 @@ TIMELINE_AUTH_POLICY_PREFIX = "Timeline auth test"
 
 @pytest.fixture(scope="module", autouse=True)
 def auth_test_setup(graph_client, auth_session):
-    with global_policy_state_lock():
-        yield from _timeline_auth_test_setup_impl(graph_client, auth_session)
+    yield from _timeline_auth_test_setup_impl(graph_client, auth_session)
 
 
 def _timeline_auth_test_setup_impl(graph_client, auth_session):
