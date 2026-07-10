@@ -47,6 +47,11 @@ if [[ "${PYTEST_XDIST_WORKERS:-0}" =~ ^[1-9][0-9]*$ ]]; then
   xdist_args=(-n "${PYTEST_XDIST_WORKERS}" --dist=loadscope)
 fi
 
+rerun_args=(--reruns 1 --reruns-delay 1)
+if [[ ${#xdist_args[@]} -gt 0 ]]; then
+  rerun_args=()
+fi
+
 # TEST_STRATEGY:
 #   if set to pytests, runs all pytests, skips cypress tests(though cypress test launch is via  a pytest).
 #   if set tp cypress, runs all cypress tests
@@ -56,7 +61,8 @@ fi
 # increase, the batch_count config (in docker-unified.yml) may need adjustment.
 if [[ "${TEST_STRATEGY}" == "pytests" ]]; then
   #pytests only - github test matrix runs pytests in one of the runners when applicable.
-  pytest -rP --durations=20 -vv --continue-on-collection-errors --reruns 1 --reruns-delay 1 \
+  pytest -rP --durations=20 -vv --continue-on-collection-errors \
+    ${rerun_args[@]+"${rerun_args[@]}"} \
     ${xdist_args[@]+"${xdist_args[@]}"} \
     --junit-xml=junit.smoke-pytests.xml -k 'not test_run_cypress'
 elif [[ "${TEST_STRATEGY}" == "cypress" ]]; then

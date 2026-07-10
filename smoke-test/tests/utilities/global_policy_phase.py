@@ -1,10 +1,11 @@
 import fcntl
 import logging
 import os
+import shutil
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator, Optional, Tuple
+from typing import Any, Iterator, List, Optional, Tuple
 
 import pytest
 
@@ -20,8 +21,8 @@ _COLLECTION_INIT_FILE = _BARRIER_DIR / "collection-init"
 _BARRIER_LOCK_FILE = _BARRIER_DIR / "barrier.lock"
 _MUTATOR_LOCK_FILE = _BARRIER_DIR / "mutator.lock"
 
-_PHASE1_WAIT_TIMEOUT_SECONDS = 3600.0
-_PHASE1_WAIT_LOG_INTERVAL_SECONDS = 60.0
+_DEFAULT_PHASE1_WAIT_TIMEOUT_SECONDS = 300.0
+_PHASE1_WAIT_LOG_INTERVAL_SECONDS = 30.0
 
 _mutator_lock_fd: Any = None
 _mutator_lock_module: Optional[str] = None
@@ -40,6 +41,35 @@ def module_has_global_policy_mutator_marker(module: Any) -> bool:
 
 def _item_is_global_policy_mutator(item: pytest.Item) -> bool:
     return item.get_closest_marker("global_policy_mutator") is not None
+
+
+def _is_phase1_item(item: pytest.Item) -> bool:
+    return not _item_is_global_policy_mutator(item) and not item.get_closest_marker(
+        "skip"
+    )
+
+
+def _session_has_policy_mutators(items: List[pytest.Item]) -> bool:
+    return any(_item_is_global_policy_mutator(item) for item in items)
+
+
+def _phase1_wait_timeout_seconds() -> float:
+    raw = os.environ.get("POLICY_PHASE_WAIT_TIMEOUT_SECONDS", "").strip()
+    if not raw:
+        return _DEFAULT_PHASE1_WAIT_TIMEOUT_SECONDS
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid POLICY_PHASE_WAIT_TIMEOUT_SECONDS=%r; using default %s",
+            raw,
+            _DEFAULT_PHASE1_WAIT_TIMEOUT_SECONDS,
+        )
+        return _DEFAULT_PHASE1_WAIT_TIMEOUT_SECONDS
+
+
+def _barrier_is_active() -> bool:
+    return _REMAINING_FILE.exists()
 
 
 def _is_last_test_in_module(item: Any, nextitem: Any) -> bool:
@@ -76,22 +106,61 @@ def _phase1_barrier_status() -> Tuple[int, int]:
         return remaining, counted
 
 
+def _clear_barrier_state() -> None:
+    if _BARRIER_DIR.exists():
+        shutil.rmtree(_BARRIER_DIR)
+    _BARRIER_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _reset_barrier_files_locked() -> None:
+    """Remove prior barrier counter files. Caller must hold ``_barrier_exclusive_lock``."""
+    _BARRIER_DIR.mkdir(parents=True, exist_ok=True)
+    for path in (
+        _REMAINING_FILE,
+        _COMPLETE_FILE,
+        _COUNTED_FILE,
+        _COLLECTION_INIT_FILE,
+    ):
+        if path.exists():
+            path.unlink()
+
+
 def init_phase1_barrier(remaining: int) -> None:
     with _barrier_exclusive_lock():
-        if _COMPLETE_FILE.exists():
-            return
-        if _REMAINING_FILE.exists():
-            return
+        _write_phase1_barrier(remaining)
 
-        _REMAINING_FILE.write_text(str(remaining))
-        _COUNTED_FILE.write_text("")
-        if remaining <= 0:
-            _COMPLETE_FILE.write_text("1")
+
+def _write_phase1_barrier(remaining: int) -> None:
+    """Initialize phase-1 counter files. Caller must hold ``_barrier_exclusive_lock``."""
+    if _COMPLETE_FILE.exists():
+        return
+    if _REMAINING_FILE.exists():
+        return
+
+    _REMAINING_FILE.write_text(str(remaining))
+    _COUNTED_FILE.write_text("")
+    if remaining <= 0:
+        _COMPLETE_FILE.write_text("1")
+
+
+def _policy_phase_run_id() -> str:
+    # xdist sets the same value on every worker in a run; avoids reusing stale /tmp state.
+    for key in ("PYTEST_XDIST_TESTRUNUID", "SMOKE_POLICY_PHASE_RUN_ID"):
+        value = os.environ.get(key)
+        if value:
+            return value
+    return f"standalone-{os.getpid()}"
+
+
+def _barrier_initialized_for_current_run() -> bool:
+    if not _COLLECTION_INIT_FILE.exists() or not _REMAINING_FILE.exists():
+        return False
+    return _COLLECTION_INIT_FILE.read_text().strip() == _policy_phase_run_id()
 
 
 def _mark_collection_initialized() -> None:
     _BARRIER_DIR.mkdir(parents=True, exist_ok=True)
-    _COLLECTION_INIT_FILE.write_text("1")
+    _COLLECTION_INIT_FILE.write_text(_policy_phase_run_id())
 
 
 def _log_missing_barrier_once() -> None:
@@ -108,7 +177,7 @@ def _log_missing_barrier_once() -> None:
 
 
 def wait_for_phase1_complete() -> None:
-    deadline = time.monotonic() + _PHASE1_WAIT_TIMEOUT_SECONDS
+    deadline = time.monotonic() + _phase1_wait_timeout_seconds()
     next_log_at = time.monotonic()
     while time.monotonic() < deadline:
         if _COMPLETE_FILE.exists():
@@ -200,14 +269,11 @@ def _release_mutator_module_if_last(item: Any, nextitem: Any) -> None:
     _release_mutator_module()
 
 
-def reset_mutator_lock_state_for_tests() -> None:
-    """Reset process-local mutator lock state (unit tests only)."""
-    _release_mutator_module()
-
-
 @pytest.hookimpl(tryfirst=True)
 def pytest_runtest_setup(item: pytest.Item) -> None:
     if env_vars.get_test_strategy() == "cypress":
+        return
+    if not _barrier_is_active():
         return
     if not _item_is_global_policy_mutator(item):
         return
@@ -223,9 +289,14 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
 def pytest_runtest_teardown(item: pytest.Item, nextitem: Optional[pytest.Item]) -> None:
     if env_vars.get_test_strategy() == "cypress":
         return
+    if not _barrier_is_active():
+        return
 
     if _item_is_global_policy_mutator(item):
         _release_mutator_module_if_last(item, nextitem)
+        return
+
+    if not _is_phase1_item(item):
         return
 
     # Decrement even when the test was skipped at setup/call (e.g. skipif). Those
@@ -233,27 +304,47 @@ def pytest_runtest_teardown(item: pytest.Item, nextitem: Optional[pytest.Item]) 
     record_phase1_test_completed(item.nodeid)
 
 
-def pytest_collection_finish(session: pytest.Session) -> None:
-    if session.config.getoption("collectonly"):
+@pytest.hookimpl(trylast=True)
+def pytest_collection_modifyitems(
+    session: pytest.Session, config: pytest.Config, items: List[pytest.Item]
+) -> None:
+    if config.getoption("collectonly"):
         return
     if env_vars.get_test_strategy() == "cypress":
         return
-    # xdist workers only see their own subset in session.items; initializing here
-    # would set the barrier to a partial count and race the controller.
-    if hasattr(session.config, "workerinput"):
+    # Under xdist, collection runs on each worker (config.workerinput is set).
+    # Initialize the shared barrier once batch slicing is complete.
+    _maybe_init_policy_phase_barrier(items)
+
+
+def _maybe_init_policy_phase_barrier(items: List[pytest.Item]) -> None:
+    if not _session_has_policy_mutators(items):
         return
 
-    phase1_count = sum(
-        1
-        for item in session.items
-        if not item.get_closest_marker("global_policy_mutator")
-        and not item.get_closest_marker("skip")
-    )
-    init_phase1_barrier(phase1_count)
-    _mark_collection_initialized()
+    phase1_count = sum(1 for item in items if _is_phase1_item(item))
+    mutator_count = sum(1 for item in items if _item_is_global_policy_mutator(item))
 
+    initialized_here = False
+    with _barrier_exclusive_lock():
+        if _barrier_initialized_for_current_run():
+            return
+        _reset_barrier_files_locked()
+        _write_phase1_barrier(phase1_count)
+        _mark_collection_initialized()
+        initialized_here = True
+
+    if not initialized_here:
+        return
+
+    batch_number = os.environ.get("BATCH_NUMBER", "?")
+    batch_count = os.environ.get("BATCH_COUNT", "?")
+    worker = os.getenv("PYTEST_XDIST_WORKER", "main")
     logger.info(
-        "Global policy ordering: %s default-policy tests, then %s mutator tests",
+        "Global policy ordering (batch %s/%s, worker=%s): %s default-policy tests, "
+        "then %s mutator tests",
+        batch_number,
+        batch_count,
+        worker,
         phase1_count,
-        len(session.items) - phase1_count,
+        mutator_count,
     )
