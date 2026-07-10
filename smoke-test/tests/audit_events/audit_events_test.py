@@ -373,46 +373,39 @@ def test_user_events():
     user_session = login_as(admin_user, admin_pass)
     wait_for_writes_to_sync(consumer_group="datahub-usage-event-consumer-job-client")
 
-    # TODO: This feels wrong, sign up link should have the user who created the sign up link as the actor, but this
-    #       requires a fairly significant refactor that's not in scope right now
-    res_data = searchForAuditEvents(
+    # TODO: sign-up link actor should be the admin who created the invite, not __datahub_system.
+    event_types = ["CreateUserEvent", "UpdateUserEvent"]
+    actor_urns = ["urn:li:corpuser:__datahub_system"]
+    aspect_names = [
+        "corpUserKey",
+        "corpUserInfo",
+        "corpUserStatus",
+        "corpUserCredentials",
+    ]
+
+    wait_for_audit_event_types_for_entity(
         user_session,
-        4,
-        ["CreateUserEvent", "UpdateUserEvent"],
-        ["urn:li:corpuser:__datahub_system"],
-        ["corpUserKey", "corpUserInfo", "corpUserStatus", "corpUserCredentials"],
-    )
-    logger.info(res_data)
-    assert len(res_data["usageEvents"]) == 4
-    assert res_data["usageEvents"][0]["eventType"] == "UpdateUserEvent"
-    assert res_data["usageEvents"][0]["entityUrn"] == AUDIT_SUITE_USER_URN
-    # Credentials and settings are in random order due to async
-    assert res_data["usageEvents"][0]["aspectName"] == "corpUserCredentials"
-
-    assert res_data["usageEvents"][1]["eventType"] == "UpdateUserEvent"
-    assert res_data["usageEvents"][1]["entityUrn"] == AUDIT_SUITE_USER_URN
-    assert res_data["usageEvents"][1]["aspectName"] == "corpUserStatus"
-
-    # These get created at the same time
-    assert (
-        res_data["usageEvents"][2]["eventType"] == "UpdateUserEvent"
-        or res_data["usageEvents"][2]["eventType"] == "CreateUserEvent"
-    )
-    assert res_data["usageEvents"][2]["entityUrn"] == AUDIT_SUITE_USER_URN
-    assert (
-        res_data["usageEvents"][2]["aspectName"] == "corpUserInfo"
-        or res_data["usageEvents"][2]["aspectName"] == "corpUserKey"
+        AUDIT_SUITE_USER_URN,
+        {"CreateUserEvent", "UpdateUserEvent"},
+        event_types,
+        actor_urns,
+        aspect_names,
+        search_size=20,
     )
 
-    assert (
-        res_data["usageEvents"][3]["eventType"] == "UpdateUserEvent"
-        or res_data["usageEvents"][3]["eventType"] == "CreateUserEvent"
+    res_data = searchForAuditEvents(
+        user_session, 20, event_types, actor_urns, aspect_names
     )
-    assert res_data["usageEvents"][3]["entityUrn"] == AUDIT_SUITE_USER_URN
-    assert (
-        res_data["usageEvents"][3]["aspectName"] == "corpUserInfo"
-        or res_data["usageEvents"][3]["aspectName"] == "corpUserKey"
+    entity_events = audit_events_for_entity(
+        res_data.get("usageEvents", []), AUDIT_SUITE_USER_URN
     )
+    logger.info({"auditSuiteUserEvents": entity_events})
+
+    assert len(entity_events) == 4
+    assert {event["aspectName"] for event in entity_events} == set(aspect_names)
+    found_types = {event["eventType"] for event in entity_events}
+    assert "CreateUserEvent" in found_types
+    assert "UpdateUserEvent" in found_types
     user_session.cookies.clear()
 
 
