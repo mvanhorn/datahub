@@ -4,7 +4,7 @@ import os
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator, Tuple
+from typing import Any, Iterator, Optional, Tuple
 
 import pytest
 
@@ -16,11 +16,16 @@ _BARRIER_DIR = Path(os.environ.get("TMPDIR", "/tmp")) / "datahub-smoke-policy-ph
 _REMAINING_FILE = _BARRIER_DIR / "phase1-remaining"
 _COMPLETE_FILE = _BARRIER_DIR / "phase1-complete"
 _COUNTED_FILE = _BARRIER_DIR / "phase1-counted.txt"
+_COLLECTION_INIT_FILE = _BARRIER_DIR / "collection-init"
 _BARRIER_LOCK_FILE = _BARRIER_DIR / "barrier.lock"
 _MUTATOR_LOCK_FILE = _BARRIER_DIR / "mutator.lock"
 
 _PHASE1_WAIT_TIMEOUT_SECONDS = 3600.0
 _PHASE1_WAIT_LOG_INTERVAL_SECONDS = 60.0
+
+_mutator_lock_fd: Any = None
+_mutator_lock_module: Optional[str] = None
+_missing_barrier_logged = False
 
 
 def module_has_global_policy_mutator_marker(module: Any) -> bool:
@@ -31,6 +36,30 @@ def module_has_global_policy_mutator_marker(module: Any) -> bool:
     if not isinstance(marks, list):
         marks = [marks]
     return any(getattr(mark, "name", None) == "global_policy_mutator" for mark in marks)
+
+
+def _item_is_global_policy_mutator(item: pytest.Item) -> bool:
+    return item.get_closest_marker("global_policy_mutator") is not None
+
+
+def _is_last_test_in_module(item: Any, nextitem: Any) -> bool:
+    if nextitem is None:
+        return True
+    item_module = getattr(item, "module", None)
+    next_module = getattr(nextitem, "module", None)
+    if item_module is None or next_module is None:
+        return True
+    return item_module.__name__ != next_module.__name__
+
+
+def _should_count_phase1_test(item: pytest.Item) -> bool:
+    rep_setup = item._store.get("rep_setup", None)  # type: ignore[arg-type]
+    if rep_setup is not None and rep_setup.skipped:
+        return False
+    rep_call = item._store.get("rep_call", None)  # type: ignore[arg-type]
+    if rep_call is not None and rep_call.skipped:
+        return False
+    return True
 
 
 @contextmanager
@@ -70,11 +99,29 @@ def init_phase1_barrier(remaining: int) -> None:
             _COMPLETE_FILE.write_text("1")
 
 
+def _mark_collection_initialized() -> None:
+    _BARRIER_DIR.mkdir(parents=True, exist_ok=True)
+    _COLLECTION_INIT_FILE.write_text("1")
+
+
 def _ensure_phase1_barrier_initialized(remaining: int) -> None:
     """Initialize the barrier if collection_finish did not run yet on this worker."""
     if _COMPLETE_FILE.exists() or _REMAINING_FILE.exists():
         return
     init_phase1_barrier(remaining)
+
+
+def _log_missing_barrier_once() -> None:
+    global _missing_barrier_logged
+    if _missing_barrier_logged:
+        return
+    _missing_barrier_logged = True
+    worker = os.getenv("PYTEST_XDIST_WORKER", "main")
+    logger.error(
+        "Global policy phase 1 barrier was not initialized on worker=%s after "
+        "collection; phase-1 teardown cannot decrement the shared counter",
+        worker,
+    )
 
 
 def wait_for_phase1_complete() -> None:
@@ -107,6 +154,8 @@ def wait_for_phase1_complete() -> None:
 def record_phase1_test_completed(nodeid: str) -> None:
     with _barrier_exclusive_lock():
         if not _REMAINING_FILE.exists():
+            if _COLLECTION_INIT_FILE.exists():
+                _log_missing_barrier_once()
             return
         if _COMPLETE_FILE.exists():
             return
@@ -131,27 +180,75 @@ def record_phase1_test_completed(nodeid: str) -> None:
             )
 
 
-@contextmanager
-def global_policy_mutator_lock() -> Iterator[None]:
-    _BARRIER_DIR.mkdir(parents=True, exist_ok=True)
-    with open(_MUTATOR_LOCK_FILE, "w") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+def _acquire_mutator_module(module_name: str) -> None:
+    global _mutator_lock_fd, _mutator_lock_module
 
-
-@pytest.fixture(autouse=True, scope="function")
-def global_policy_mutator_gate(request):
-    """After default-policy tests finish, run mutator tests one at a time."""
-    if not request.node.get_closest_marker("global_policy_mutator"):
-        yield
+    if _mutator_lock_module == module_name:
         return
 
+    if _mutator_lock_module is not None:
+        raise RuntimeError(
+            f"Mutator lock already held by {_mutator_lock_module!r}, "
+            f"cannot acquire for {module_name!r} on the same worker"
+        )
+
+    _BARRIER_DIR.mkdir(parents=True, exist_ok=True)
+    lock_fd = open(_MUTATOR_LOCK_FILE, "w")
+    fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+    _mutator_lock_fd = lock_fd
+    _mutator_lock_module = module_name
+
+
+def _release_mutator_module() -> None:
+    global _mutator_lock_fd, _mutator_lock_module
+
+    if _mutator_lock_fd is None:
+        return
+
+    fcntl.flock(_mutator_lock_fd.fileno(), fcntl.LOCK_UN)
+    _mutator_lock_fd.close()
+    _mutator_lock_fd = None
+    _mutator_lock_module = None
+
+
+def _release_mutator_module_if_last(item: Any, nextitem: Any) -> None:
+    if not _is_last_test_in_module(item, nextitem):
+        return
+    _release_mutator_module()
+
+
+def reset_mutator_lock_state_for_tests() -> None:
+    """Reset process-local mutator lock state (unit tests only)."""
+    _release_mutator_module()
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    if env_vars.get_test_strategy() == "cypress":
+        return
+    if not _item_is_global_policy_mutator(item):
+        return
+    item_module = getattr(item, "module", None)
+    if item_module is None:
+        raise RuntimeError("global_policy_mutator test has no module")
+
     wait_for_phase1_complete()
-    with global_policy_mutator_lock():
-        yield
+    _acquire_mutator_module(item_module.__name__)
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_runtest_teardown(item: pytest.Item, nextitem: Optional[pytest.Item]) -> None:
+    if env_vars.get_test_strategy() == "cypress":
+        return
+
+    if _item_is_global_policy_mutator(item):
+        _release_mutator_module_if_last(item, nextitem)
+        return
+
+    if not _should_count_phase1_test(item):
+        return
+
+    record_phase1_test_completed(item.nodeid)
 
 
 def pytest_collection_finish(session: pytest.Session) -> None:
@@ -164,8 +261,11 @@ def pytest_collection_finish(session: pytest.Session) -> None:
         1
         for item in session.items
         if not item.get_closest_marker("global_policy_mutator")
+        and not item.get_closest_marker("skip")
     )
     _ensure_phase1_barrier_initialized(phase1_count)
+    _mark_collection_initialized()
+
     if hasattr(session.config, "workerinput"):
         return
 
@@ -174,9 +274,3 @@ def pytest_collection_finish(session: pytest.Session) -> None:
         phase1_count,
         len(session.items) - phase1_count,
     )
-
-
-def pytest_runtest_teardown(item: pytest.Item, nextitem) -> None:
-    if item.get_closest_marker("global_policy_mutator"):
-        return
-    record_phase1_test_completed(item.nodeid)
